@@ -1,0 +1,32 @@
+import {
+  coreServices,
+  createBackendPlugin,
+} from '@backstage/backend-plugin-api';
+import { createRouter } from './router';
+import { todoListServiceRef } from './services/TodoListService';
+
+/**
+ * pluginCPlugin backend plugin
+ *
+ * @public
+ */
+export const pluginCPlugin = createBackendPlugin({
+  pluginId: 'plugin-c',
+  register(env) {
+    env.registerInit({
+      deps: {
+        httpAuth: coreServices.httpAuth,
+        httpRouter: coreServices.httpRouter,
+        todoList: todoListServiceRef,
+      },
+      async init({ httpAuth, httpRouter, todoList }) {
+        httpRouter.use(
+          await createRouter({
+            httpAuth,
+            todoList,
+          }),
+        );
+      },
+    });
+  },
+});

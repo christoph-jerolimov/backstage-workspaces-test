@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect changed workspaces
+    runs-on: ubuntu-latest
+    outputs:
+      workspaces: ${{ steps.detect.outputs.workspaces }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed workspaces
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          all_workspaces() {
+            for dir in workspaces/*/; do
+              [ -f "${dir}package.json" ] && basename "$dir"
+            done
+          }
+
+          base=""
+          case "$EVENT_NAME" in
+            pull_request) base="$(git merge-base "$PR_BASE_SHA" HEAD || true)" ;;
+            push) base="$PUSH_BEFORE_SHA" ;;
+          esac
+
+          if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "No usable base commit, running all workspaces"
+            selected="$(all_workspaces)"
+          else
+            changed_files="$(git diff --name-only "$base" HEAD)"
+            echo "Changed files since $base:"
+            echo "$changed_files"
+
+            if echo "$changed_files" | grep -q '^\.github/workflows/'; then
+              echo "Workflow files changed, running all workspaces"
+              selected="$(all_workspaces)"
+            else
+              selected="$(
+                echo "$changed_files" \
+                  | sed -n 's|^workspaces/\([^/]*\)/.*|\1|p' \
+                  | sort -u \
+                  | while read -r name; do
+                      # Skip workspaces that were removed
+                      [ -f "workspaces/$name/package.json" ] && echo "$name"
+                    done
+              )"
+            fi
+          fi
+
+          json="$(printf '%s\n' "$selected" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
+          echo "Workspaces to run: $json"
+          echo "workspaces=$json" >> "$GITHUB_OUTPUT"
+
+  workspace:
+    name: ${{ matrix.workspace }}
+    needs: changes
+    if: needs.changes.outputs.workspaces != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: ${{ fromJSON(needs.changes.outputs.workspaces) }}
+    uses: ./.github/workflows/workspace.yml
+    with:
+      workspace: ${{ matrix.workspace }}
+
+  # Single stable check that can be used as a required status check,
+  # independent of how many workspaces were changed.
+  ci:
+    name: CI result
+    needs: [changes, workspace]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          WORKSPACE_RESULT: ${{ needs.workspace.result }}
+        run: |
+          echo "changes: $CHANGES_RESULT"
+          echo "workspace: $WORKSPACE_RESULT"
+          [ "$CHANGES_RESULT" = "success" ] || exit 1
+          case "$WORKSPACE_RESULT" in
+            success | skipped) ;;
+            *) exit 1 ;;
+          esac
