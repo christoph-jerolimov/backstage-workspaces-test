@@ -9,10 +9,7 @@ export const page = PageBlueprint.make({
   params: {
     path: '/plugin-a',
     routeRef: rootRouteRef,
-    loader: () =>
-      import('./components/TodoPage').then(m => (
-        <m.TodoPage />
-      )),
+    loader: () => import('./components/TodoPage').then(m => <m.TodoPage />),
   },
 });
 
@@ -22,5 +19,5 @@ export const pluginAPlugin = createFrontendPlugin({
   extensions: [page],
   routes: {
     root: rootRouteRef,
-  }
+  },
 });
